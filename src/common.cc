@@ -453,6 +453,15 @@ v8::Local<v8::Object> ToV8Object(RdKafka::Message *message, bool include_payload
     Nan::Set(pack, Nan::New<v8::String>("timestamp").ToLocalChecked(),
       Nan::New<v8::Number>(message->timestamp().timestamp));
 
+    v8::Local<v8::Object> head = Nan::New<v8::Object>();
+    RdKafka::Headers headers = message->headers();
+    for (RdKafka::Headers::iterator iter = headers.begin(); iter != headers.end(); ++iter) {
+      Nan::Set(head, Nan::New<v8::String>(iter->first).ToLocalChecked(),
+        Nan::New<v8::String>(std::string(static_cast<const char*>(iter->second.first), iter->second.second)).ToLocalChecked());
+    }
+
+    Nan::Set(pack, Nan::New<v8::String>("headers").ToLocalChecked(), head);
+
     return pack;
   } else {
     return RdKafkaError(message->err());

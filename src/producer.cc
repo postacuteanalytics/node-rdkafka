@@ -13,6 +13,9 @@
 #include "src/producer.h"
 #include "src/workers.h"
 
+#include <map>
+#include <utility>
+
 namespace NodeKafka {
 
 /**
@@ -258,10 +261,11 @@ Baton Producer::Produce(void* message, size_t size, RdKafka::Topic* topic,
  * @return - A baton object with error code set if it failed.
  */
 Baton Producer::Produce(void* message, size_t size, std::string topic,
-  int32_t partition, std::string *key, int64_t timestamp, void* opaque) {
+  int32_t partition, std::string *key, int64_t timestamp, void* opaque,
+  RdKafka::Headers headers) {
   return Produce(message, size, topic, partition,
     key ? key->data() : NULL, key ? key->size() : 0,
-    timestamp, opaque);
+    timestamp, opaque, headers);
 }
 
 /**
@@ -279,7 +283,7 @@ Baton Producer::Produce(void* message, size_t size, std::string topic,
  */
 Baton Producer::Produce(void* message, size_t size, std::string topic,
   int32_t partition, const void *key, size_t key_len,
-  int64_t timestamp, void* opaque) {
+  int64_t timestamp, void* opaque, RdKafka::Headers headers) {
   RdKafka::ErrorCode response_code;
 
   if (IsConnected()) {
@@ -291,7 +295,8 @@ Baton Producer::Produce(void* message, size_t size, std::string topic,
             RdKafka::Producer::RK_MSG_COPY,
             message, size,
             key, key_len,
-            timestamp, opaque);
+            timestamp, opaque,
+            headers);
     } else {
       response_code = RdKafka::ERR__STATE;
     }
@@ -439,6 +444,28 @@ NAN_METHOD(Producer::NodeProduce) {
 
   Producer* producer = ObjectWrap::Unwrap<Producer>(info.This());
 
+  RdKafka::Headers headers;
+  if (info.Length() > 6 && !info[6]->IsUndefined()) {
+    v8::Local<v8::Object> hdrs = info[6]->ToObject();
+
+    v8::Local<v8::Array> props = Nan::GetPropertyNames(hdrs).ToLocalChecked();
+    uint32_t propCount = props->Length();
+
+    std::string key, value;
+    for (uint32_t i = 0; i < propCount; ++i) {
+      v8::Local<v8::Value> v8Key = Nan::Get(props, i).ToLocalChecked();
+      v8::Local<v8::Value> v8Value = Nan::Get(hdrs, v8Key).ToLocalChecked();
+
+      Nan::Utf8String key(v8Key->ToString());
+      Nan::Utf8String value(v8Value->ToString());
+
+      void* data = malloc(value.length());
+      memcpy(data, static_cast<const void*>(*value), value.length());
+
+      headers[std::string(*key)] = std::make_pair(data, value.length());
+    }
+  }
+
   // Let the JS library throw if we need to so the error can be more rich
   int error_code;
 
@@ -449,7 +476,7 @@ NAN_METHOD(Producer::NodeProduce) {
 
     Baton b = producer->Produce(message_buffer_data, message_buffer_length,
      topic_name, partition, key_buffer_data, key_buffer_length,
-     timestamp, opaque);
+     timestamp, opaque, headers);
 
     error_code = static_cast<int>(b.err());
   } else {
@@ -479,6 +506,10 @@ NAN_METHOD(Producer::NodeProduce) {
 
   if (key != NULL) {
     delete key;
+  }
+
+  for (RdKafka::Headers::iterator iter = headers.begin(); iter != headers.end(); ++iter) {
+    free(const_cast<void*>(iter->second.first));
   }
 
   info.GetReturnValue().Set(Nan::New<v8::Number>(error_code));
